@@ -14,7 +14,7 @@ from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import
     PipelineImageInput
 )
 
-from src.eunms import Epsilon_Update_Type
+#from src.eunms import Epsilon_Update_Type
 
 
 def _backward_ddim(x_tm1, alpha_t, alpha_tm1, eps_xt):
