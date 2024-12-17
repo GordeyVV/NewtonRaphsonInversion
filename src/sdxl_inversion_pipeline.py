@@ -352,48 +352,6 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         return best_latent
     '''
-    '''
-    # Gauss-Newton
-    def inversion_step(
-            self,
-            z_t: torch.tensor,
-            t: torch.tensor,
-            prompt_embeds,
-            added_cond_kwargs,
-            prev_timestep: Optional[torch.tensor] = None,
-            inv_hp=None,
-            z_0=None,
-    ) -> torch.tensor:
-
-        n_iters, alpha, lr = inv_hp
-        latent = z_t
-        best_latent = None
-        best_score = torch.inf
-        curr_dist = self.get_timestamp_dist(z_0, t)
-        for i in range(n_iters):
-            latent.requires_grad = True
-            noise_pred = self.unet_pass(latent, t, prompt_embeds, added_cond_kwargs)
-
-            next_latent = self.backward_step(noise_pred, t, z_t, prev_timestep)
-            residual = next_latent - latent
-            jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
-        
-            # Here we calculate the approximation of the Hessian using the outer product of the Jacobian, which is specific to Gauss-Newton method
-            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + torch.eye(jacobian.size(0)).to(jacobian.device) * alpha
-            hessian_inv = torch.inverse(approx_hessian)
-        
-            # Update step using Gauss-Newton approximation of the Hessian
-            latent_update = hessian_inv.bmm(jacobian.unsqueeze(-1)).squeeze(-1)
-            latent = latent - lr * latent_update
-            latent.requires_grad = False
-        
-            score = residual.norm()
-            if score < best_score:
-                best_score = score
-                best_latent = latent.detach()
-
-        return best_latent
-    '''
     # Levenberg-Marquardt
     def inversion_step(
             self,
@@ -406,36 +364,53 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             z_0=None,
     ) -> torch.tensor:
 
-        # n_iters, alpha, lr, lambda_damp = inv_hp  # добавлен параметр демпфирования lambda_damp
-        # lambda_damp = 0.1
-        n_iters, alpha, lr = inv_hp
-        latent = z_t
+        lambda_damp = 0.01       # Начальное значение параметра демпфирования
+
+        # Инициализируем параметры для корректировки lambda_damp
+        damp_increase_multiplier = 2.0  # Множитель для увеличения lambda_damp
+        damp_decrease_multiplier = 0.5  # Множитель для уменьшения lambda_damp
+
         best_latent = None
         best_score = torch.inf
-        curr_dist = self.get_timestamp_dist(z_0, t)
+
         for i in range(n_iters):
+            latent = z_t.clone().detach()
             latent.requires_grad = True
             noise_pred = self.unet_pass(latent, t, prompt_embeds, added_cond_kwargs)
-
             next_latent = self.backward_step(noise_pred, t, z_t, prev_timestep)
             residual = next_latent - latent
             jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
 
-            # Гессиан аппроксимируется с использованием Якобиана, но добавлено демпфирование
-            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + 0.1 * torch.eye(jacobian.size(0)).to(jacobian.device)
+            # Исправляем размерность jacobian и добавляем фиктивную размерность batch
+            jacobian = jacobian.unsqueeze(0)
+            I = torch.eye(jacobian.size(2)).unsqueeze(0).to(latent.device)
 
-            # Гессиан с демпфированием не нужно обращать, выполняется решение системы линейных уравнений
-            hessian_inv = torch.linalg.solve(approx_hessian, torch.eye(jacobian.size(0)).to(jacobian.device))
+            # Корректируем approx_hessian с учётом размерности batch
+            approx_hessian = jacobian.bmm(jacobian.transpose(1, 2)) + lambda_damp * I
+
+            # Используем solve вместо invert для повышения стабильности
+            hessian_inv = torch.linalg.solve(approx_hessian, I)
         
-            # Шаг обновления по алгоритму Левенберга-Марквардта
-            latent_update = hessian_inv.bmm(jacobian.unsqueeze(-1)).squeeze(-1)
-            latent = latent - lr * latent_update
-            latent.requires_grad = False
-        
-            score = residual.norm()
-            if score < best_score:
-                best_score = score
-                best_latent = latent.detach()
+            # Рассчитываем обновление для latent
+            latent_update = hessian_inv.bmm(jacobian.transpose(1, 2)).squeeze(0)
+            z_t_candidate = latent - lr * latent_update.squeeze(0)
+            z_t.requires_grad = False
+
+            # Вычисляем новую ошибку
+            new_score = residual.norm()
+
+            # Автоматически корректируем lambda_damp
+            if new_score < best_score:
+                # Если ошибка уменьшилась, обновляем лучший результат и уменьшаем lambda_damp
+                best_score = new_score
+                best_latent = z_t_candidate.detach()
+                lambda_damp = max(lambda_damp * damp_decrease_multiplier, 1e-7)  # Нижний порог для lambda_damp
+            else:
+                # Если ошибка не уменьшилась, увеличиваем lambda_damp
+                lambda_damp = min(lambda_damp * damp_increase_multiplier, 1e7)  # Верхний порог для lambda_damp
+                # Возвращаем предыдущий лучший результат
+                z_t = best_latent.clone().detach()
+                z_t.requires_grad = True
 
         return best_latent
     
