@@ -315,7 +315,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         return gaussian_pdf
 
-    
+    '''
     def inversion_step(
             self,
             z_t: torch.tensor,
@@ -351,8 +351,8 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             latent._grad_fn = None
 
         return best_latent
-    
     '''
+    
     # Levenberg-Marquardt with adapting damp param
     def inversion_step(
             self,
@@ -403,7 +403,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             latent._grad_fn = None
 
         return best_latent
-    '''
+    
     
     @torch.no_grad()
     def unet_pass(self, z_t, t, prompt_embeds, added_cond_kwargs):
