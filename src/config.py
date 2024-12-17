@@ -13,5 +13,7 @@ class RunConfig:
 
     inversion_max_step: float = 1.0
 
+    lambda_damp: float = 0.1
+
     def __post_init__(self):
         pass
