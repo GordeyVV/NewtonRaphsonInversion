@@ -352,7 +352,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         return best_latent
     '''
-    # Levenberg-Marquardt
+    # Levenberg-Marquardt with adapting damp param
     def inversion_step(
             self,
             z_t: torch.tensor,
@@ -365,56 +365,44 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
     ) -> torch.tensor:
 
         n_iters, alpha, lr = inv_hp
-        
-        lambda_damp = 0.01       # Начальное значение параметра демпфирования
+        lambda_damp = 1e-3  # Инициализация демпфирующего множителя
+        lambda_up_factor = 10  # Множитель для увеличения lambda
+        lambda_down_factor = 10  # Множитель для уменьшения lambda
 
-        # Инициализируем параметры для корректировки lambda_damp
-        damp_increase_multiplier = 2.0  # Множитель для увеличения lambda_damp
-        damp_decrease_multiplier = 0.5  # Множитель для уменьшения lambda_damp
-
+        latent = z_t
         best_latent = None
         best_score = torch.inf
-
+        curr_dist = self.get_timestamp_dist(z_0, t)
         for i in range(n_iters):
-            latent = z_t.clone().detach()
             latent.requires_grad = True
             noise_pred = self.unet_pass(latent, t, prompt_embeds, added_cond_kwargs)
+
             next_latent = self.backward_step(noise_pred, t, z_t, prev_timestep)
-            residual = next_latent - latent
-            jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
+            f_x = (next_latent - latent).abs() - alpha * curr_dist(next_latent)
+            l = f_x.sum()
+            score = f_x.mean()
 
-            # Исправляем размерность jacobian и добавляем фиктивную размерность batch
-            jacobian = jacobian.unsqueeze(0)
-            I = torch.eye(jacobian.size(2)).unsqueeze(0).to(latent.device)
+            l.backward()
+            I = torch.eye(latent.size(0), device=latent.device)
+            grad = latent.grad
+            hessian_approx = grad @ grad.T
 
-            # Корректируем approx_hessian с учётом размерности batch
-            approx_hessian = jacobian.bmm(jacobian.transpose(1, 2)) + lambda_damp * I
+            # Обновление с демпфирующим множителем
+            update = torch.inverse(hessian_approx + lambda_damp * I) @ grad
 
-            # Используем solve вместо invert для повышения стабильности
-            hessian_inv = torch.linalg.solve(approx_hessian, I)
-        
-            # Рассчитываем обновление для latent
-            latent_update = hessian_inv.bmm(jacobian.transpose(1, 2)).squeeze(0)
-            z_t_candidate = latent - lr * latent_update.squeeze(0)
-            z_t.requires_grad = False
-
-            # Вычисляем новую ошибку
-            new_score = residual.norm()
-
-            # Автоматически корректируем lambda_damp
-            if new_score < best_score:
-                # Если ошибка уменьшилась, обновляем лучший результат и уменьшаем lambda_damp
-                best_score = new_score
-                best_latent = z_t_candidate.detach()
-                lambda_damp = max(lambda_damp * damp_decrease_multiplier, 1e-7)  # Нижний порог для lambda_damp
+            if score < best_score:
+                best_score = score
+                best_latent = next_latent.detach()
+                lambda_damp /= lambda_down_factor  # Уменьшение lambda_damp если шаг улучшил функцию потерь
             else:
-                # Если ошибка не уменьшилась, увеличиваем lambda_damp
-                lambda_damp = min(lambda_damp * damp_increase_multiplier, 1e7)  # Верхний порог для lambda_damp
-                # Возвращаем предыдущий лучший результат
-                z_t = best_latent.clone().detach()
-                z_t.requires_grad = True
+                lambda_damp *= lambda_up_factor  # Увеличение lambda_damp если шаг не уменьшил функцию потерь
+
+            latent = latent - lr * update
+            latent.grad = None
+            latent._grad_fn = None
 
         return best_latent
+
     
     @torch.no_grad()
     def unet_pass(self, z_t, t, prompt_embeds, added_cond_kwargs):
