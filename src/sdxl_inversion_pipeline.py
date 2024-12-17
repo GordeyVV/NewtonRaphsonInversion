@@ -364,6 +364,8 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             z_0=None,
     ) -> torch.tensor:
 
+        n_iters, alpha, lr = inv_hp
+        
         lambda_damp = 0.01       # Начальное значение параметра демпфирования
 
         # Инициализируем параметры для корректировки lambda_damp
