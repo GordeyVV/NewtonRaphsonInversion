@@ -352,6 +352,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         return best_latent
     '''
+    '''
     # Gauss-Newton
     def inversion_step(
             self,
@@ -382,6 +383,49 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             hessian_inv = torch.inverse(approx_hessian)
         
             # Update step using Gauss-Newton approximation of the Hessian
+            latent_update = hessian_inv.bmm(jacobian.unsqueeze(-1)).squeeze(-1)
+            latent = latent - lr * latent_update
+            latent.requires_grad = False
+        
+            score = residual.norm()
+            if score < best_score:
+                best_score = score
+                best_latent = latent.detach()
+
+        return best_latent
+    '''
+    # Levenberg-Marquardt
+    def inversion_step(
+            self,
+            z_t: torch.tensor,
+            t: torch.tensor,
+            prompt_embeds,
+            added_cond_kwargs,
+            prev_timestep: Optional[torch.tensor] = None,
+            inv_hp=None,
+            z_0=None,
+    ) -> torch.tensor:
+
+        n_iters, alpha, lr, lambda_damp = inv_hp  # добавлен параметр демпфирования lambda_damp
+        latent = z_t
+        best_latent = None
+        best_score = torch.inf
+        curr_dist = self.get_timestamp_dist(z_0, t)
+        for i in range(n_iters):
+            latent.requires_grad = True
+            noise_pred = self.unet_pass(latent, t, prompt_embeds, added_cond_kwargs)
+
+            next_latent = self.backward_step(noise_pred, t, z_t, prev_timestep)
+            residual = next_latent - latent
+            jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
+
+            # Гессиан аппроксимируется с использованием Якобиана, но добавлено демпфирование
+            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + lambda_damp * torch.eye(jacobian.size(0)).to(jacobian.device)
+
+            # Гессиан с демпфированием не нужно обращать, выполняется решение системы линейных уравнений
+            hessian_inv = torch.linalg.solve(approx_hessian, torch.eye(jacobian.size(0)).to(jacobian.device))
+        
+            # Шаг обновления по алгоритму Левенберга-Марквардта
             latent_update = hessian_inv.bmm(jacobian.unsqueeze(-1)).squeeze(-1)
             latent = latent - lr * latent_update
             latent.requires_grad = False
