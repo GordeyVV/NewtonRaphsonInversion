@@ -366,7 +366,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
     ) -> torch.tensor:
 
         n_iters, alpha, lr = inv_hp
-        lambda_damp = 1e-3  # Инициализация демпфирующего множителя
+        lambda_damp = 1e3  # Инициализация демпфирующего множителя
         lambda_up_factor = 10  # Множитель для увеличения lambda
         lambda_down_factor = 10  # Множитель для уменьшения lambda
 
