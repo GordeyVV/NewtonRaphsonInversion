@@ -315,6 +315,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
 
         return gaussian_pdf
 
+    '''
     def inversion_step(
             self,
             z_t: torch.tensor,
@@ -350,7 +351,48 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             latent._grad_fn = None
 
         return best_latent
+    '''
+    # Gauss-Newton
+    def inversion_step(
+            self,
+            z_t: torch.tensor,
+            t: torch.tensor,
+            prompt_embeds,
+            added_cond_kwargs,
+            prev_timestep: Optional[torch.tensor] = None,
+            inv_hp=None,
+            z_0=None,
+    ) -> torch.tensor:
 
+        n_iters, alpha, lr = inv_hp
+        latent = z_t
+        best_latent = None
+        best_score = torch.inf
+        curr_dist = self.get_timestamp_dist(z_0, t)
+        for i in range(n_iters):
+            latent.requires_grad = True
+            noise_pred = self.unet_pass(latent, t, prompt_embeds, added_cond_kwargs)
+
+            next_latent = self.backward_step(noise_pred, t, z_t, prev_timestep)
+            residual = next_latent - latent
+            jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
+        
+            # Here we calculate the approximation of the Hessian using the outer product of the Jacobian, which is specific to Gauss-Newton method
+            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + torch.eye(jacobian.size(0)).to(jacobian.device) * alpha
+            hessian_inv = torch.inverse(approx_hessian)
+        
+            # Update step using Gauss-Newton approximation of the Hessian
+            latent_update = hessian_inv.bmm(jacobian.unsqueeze(-1)).squeeze(-1)
+            latent = latent - lr * latent_update
+            latent.requires_grad = False
+        
+            score = residual.norm()
+            if score < best_score:
+                best_score = score
+                best_latent = latent.detach()
+
+        return best_latent
+    
     @torch.no_grad()
     def unet_pass(self, z_t, t, prompt_embeds, added_cond_kwargs):
         latent_model_input = torch.cat([z_t] * 2) if self.do_classifier_free_guidance else z_t
