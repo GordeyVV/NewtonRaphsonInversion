@@ -406,7 +406,9 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             z_0=None,
     ) -> torch.tensor:
 
-        n_iters, alpha, lr, lambda_damp = inv_hp  # добавлен параметр демпфирования lambda_damp
+        # n_iters, alpha, lr, lambda_damp = inv_hp  # добавлен параметр демпфирования lambda_damp
+        # lambda_damp = 0.1
+        n_iters, alpha, lr = inv_hp
         latent = z_t
         best_latent = None
         best_score = torch.inf
@@ -420,7 +422,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             jacobian = torch.autograd.grad(residual, latent, torch.ones_like(residual), create_graph=True)[0]
 
             # Гессиан аппроксимируется с использованием Якобиана, но добавлено демпфирование
-            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + lambda_damp * torch.eye(jacobian.size(0)).to(jacobian.device)
+            approx_hessian = jacobian.unsqueeze(-1).bmm(jacobian.unsqueeze(1)) + 0.1 * torch.eye(jacobian.size(0)).to(jacobian.device)
 
             # Гессиан с демпфированием не нужно обращать, выполняется решение системы линейных уравнений
             hessian_inv = torch.linalg.solve(approx_hessian, torch.eye(jacobian.size(0)).to(jacobian.device))
