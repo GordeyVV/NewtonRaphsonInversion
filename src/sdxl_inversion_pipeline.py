@@ -402,6 +402,8 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             latent.grad = None
             latent._grad_fn = None
 
+        print("Levenberg-Marquardt")
+
         return best_latent
     
     
