@@ -389,7 +389,7 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             hessian_approx = grad @ grad.mT 
 
             # Обновление с демпфирующим множителем
-            update = torch.inverse(hessian_approx + lambda_damp * I) @ grad
+            update = torch.inverse(hessian_approx.float() + lambda_damp * I) @ grad.float()
 
             if score < best_score:
                 best_score = score
@@ -398,7 +398,8 @@ class SDXLDDIMPipeline(StableDiffusionXLImg2ImgPipeline):
             else:
                 lambda_damp *= lambda_up_factor  # Увеличение lambda_damp если шаг не уменьшил функцию потерь
 
-            latent = latent - lr * update
+            latent = latent.float() - lr * update
+            latent = latent.half()
             latent.grad = None
             latent._grad_fn = None
 
